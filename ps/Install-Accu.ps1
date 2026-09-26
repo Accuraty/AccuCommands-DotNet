@@ -1,5 +1,6 @@
 param(
-    [string] $PackageFeed = 'A:\dev\nupkg'
+    [string] $PackageFeed = 'A:\dev\nupkg',
+    [string] $PackageVersion
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,11 +22,18 @@ if (-not (Test-Path -LiteralPath $PackageFeed -PathType Container)) {
 }
 
 $installed = Get-InstalledAccu
+$toolArguments = @('tool')
 if ($installed) {
-    dotnet tool update --global --source $PackageFeed $packageId
+    $toolArguments += 'update'
 } else {
-    dotnet tool install --global --source $PackageFeed $packageId
+    $toolArguments += 'install'
 }
+$toolArguments += @('--global', '--source', $PackageFeed, $packageId)
+if ($PackageVersion) {
+    $toolArguments += @('--version', $PackageVersion)
+    Write-Host "Installing requested package version $PackageVersion..."
+}
+dotnet @toolArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Could not install or update $packageId from '$PackageFeed'."
 }
@@ -33,6 +41,9 @@ if ($LASTEXITCODE -ne 0) {
 $installed = Get-InstalledAccu
 if (-not $installed) {
     throw "The .NET tool command did not report $packageId after installation."
+}
+if ($PackageVersion -and $installed.version -ne $PackageVersion) {
+    throw "Expected $packageId version '$PackageVersion' after installation, but found '$($installed.version)'."
 }
 
 $toolStore = Join-Path $HOME ".dotnet\tools\.store\$($packageId.ToLowerInvariant())\$($installed.version)"

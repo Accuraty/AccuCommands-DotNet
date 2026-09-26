@@ -4,7 +4,30 @@ A .NET 10 global command-line tool. The installed command is `accu`.
 
 Complete how-to setup on Windows 11 is in /docs/README-Windows11-Setup.md
 
-The project tracks the latest stable Microsoft.Playwright release in the 1.x series (`1.*`). A normal restore during build or package publishing resolves the latest matching minor and patch version.
+Microsoft.Playwright is pinned to version 1.63.0, with the resolved dependency graph recorded in `packages.lock.json`. To update dependencies, change the package version intentionally and run `dotnet restore` to refresh the lock file.
+
+## Build and test
+
+Run the same basic checks used by CI from the repository root:
+
+```powershell
+dotnet restore AccuCommands.sln --locked-mode
+dotnet build AccuCommands.sln --configuration Release --no-restore
+dotnet test AccuCommands.sln --configuration Release --no-build --no-restore
+dotnet pack AccuCommands.csproj --configuration Release --no-build --no-restore --output artifacts/packages
+```
+
+## Help
+
+Run `accu` for a short overview, `accu help` for the full command reference, or `accu examples` for usage examples (`accu samples` is an alias).
+
+## Check the installed version
+
+```powershell
+accu version
+accu -v
+accu --version
+```
 
 ## Capture a page
 
@@ -39,6 +62,7 @@ $env:DATAFORSEO_PASSWORD = '<your-api-password>'
 Pass the search phrase separately from the location. U.S. city and state names or abbreviations are resolved to the DataForSEO location code. If omitted, searches use the United States. `--engine` accepts `google` or `bing` and defaults to Google; `--max-pages` accepts 1 through 10 and defaults to 10:
 
 ```powershell
+accu serp classicplumb.com "air conditioning" --location "Savoy, IL"
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL"
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --engine bing
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --max-pages 3
@@ -55,6 +79,16 @@ With the `A:` network drive connected, run this from the project folder:
 ```
 
 This builds `Accuraty.Commands.Cli` and copies the NuGet package, its NuGet dependencies, and the installer script to `A:\dev\nupkg\`. The share acts as a local NuGet feed, so clients do not need to download the tool or its NuGet dependencies from nuget.org.
+
+## Build, publish, and install locally
+
+With the `A:` network drive connected, run this from the project folder:
+
+```powershell
+.\ps\Build-Publish-Install.ps1
+```
+
+This packs the project in Release configuration with a unique next-patch prerelease version (for example, `1.1.1-dev.20260926T1530001234567Z` when the stable project version is `1.1.0`), publishes the package and dependencies to `A:\dev\nupkg\`, then installs that exact prerelease and its Chromium browser for the current user. The project file keeps its stable `Major.Minor.Patch` version unchanged. Try `accu version` when it finishes; it reports the prerelease version for the installed development build.
 
 ## Install or update on another machine
 

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -12,7 +13,7 @@ internal static class Accu
     {
         if (args.Length == 0)
         {
-            PrintHelp();
+            PrintSummary();
             return 0;
         }
 
@@ -22,13 +23,25 @@ internal static class Accu
             return 0;
         }
 
+        if (args[0] is "examples" or "samples")
+        {
+            PrintExamples();
+            return 0;
+        }
+
+        if (args[0] is "version" or "--version" or "-v")
+        {
+            Console.WriteLine(GetVersion());
+            return 0;
+        }
+
         if (args[0] == "serp")
             return await RunSerpAsync(args);
 
         if (args[0] != "capture")
         {
             Console.Error.WriteLine($"Unknown command: {args[0]}");
-            PrintHelp();
+            PrintSummary();
             return 2;
         }
 
@@ -68,10 +81,10 @@ internal static class Accu
 
         var extension = format == "pdf" ? "pdf" : "jpg";
         outputPath ??= Path.Combine(GetDownloadsFolder(), $"{SafeFileName(uri.Host)}-{DateTime.Now:yyyyMMdd-HHmmss}.{extension}");
-        outputPath = Path.GetFullPath(outputPath);
 
         try
         {
+            outputPath = Path.GetFullPath(outputPath);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
             using var playwright = await Playwright.CreateAsync();
             await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
@@ -81,7 +94,7 @@ internal static class Accu
                 DeviceScaleFactor = 1
             });
 
-            Console.WriteLine($"Loading {uri} …");
+            Console.WriteLine($"Loading {GetDisplayUrl(uri)} …");
             await page.GotoAsync(uri.ToString(), new PageGotoOptions
             {
                 WaitUntil = WaitUntilState.NetworkIdle,
@@ -111,14 +124,15 @@ internal static class Accu
         }
         catch (PlaywrightException ex)
         {
-            Console.Error.WriteLine($"Could not capture the page: {ex.Message}");
+            var safeMessage = ex.Message.Replace(uri.ToString(), GetDisplayUrl(uri), StringComparison.OrdinalIgnoreCase);
+            Console.Error.WriteLine($"Could not capture the page: {safeMessage}");
             if (ex.Message.Contains("Executable doesn't exist", StringComparison.OrdinalIgnoreCase))
                 Console.Error.WriteLine("Install Chromium once with the Playwright script generated beside the build output: .\\playwright.ps1 install chromium");
             return 1;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            Console.Error.WriteLine($"Could not save the screenshot: {ex.Message}");
+            Console.Error.WriteLine($"Could not use output path '{outputPath}': {ex.Message}");
             return 1;
         }
     }
@@ -138,64 +152,15 @@ internal static class Accu
             return 2;
         }
 
-        string? query = null;
-        string? location = null;
-        var engine = "google";
-        var maxPages = 10;
-        for (var i = 2; i < args.Length; i++)
+        if (!TryParseSerpOptions(args[2..], out var options, out var parseError))
         {
-            if (args[i] is "--query" or "-q")
-            {
-                if (!TryReadOptionValue(args, ref i, out query))
-                {
-                    Console.Error.WriteLine("The --query option requires a search phrase.");
-                    return 2;
-                }
-            }
-            else if (args[i] is "--location" or "-l")
-            {
-                if (!TryReadOptionValue(args, ref i, out location))
-                {
-                    Console.Error.WriteLine("The --location option requires a location.");
-                    return 2;
-                }
-            }
-            else if (args[i] is "--engine" or "-e")
-            {
-                if (!TryReadOptionValue(args, ref i, out engine))
-                {
-                    Console.Error.WriteLine("The --engine option requires 'google' or 'bing'.");
-                    return 2;
-                }
-                engine = engine.ToLowerInvariant();
-            }
-            else if (args[i] is "--max-pages" or "-p")
-            {
-                if (!TryReadOptionValue(args, ref i, out var pagesText)
-                    || !int.TryParse(pagesText, out maxPages)
-                    || maxPages is < 1 or > 10)
-                {
-                    Console.Error.WriteLine("The --max-pages option must be a number from 1 to 10.");
-                    return 2;
-                }
-            }
-            else
-            {
-                Console.Error.WriteLine($"Unknown option: {args[i]}");
-                return 2;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            Console.Error.WriteLine("Provide a search phrase with --query.");
+            Console.Error.WriteLine(parseError);
             return 2;
         }
-        if (engine is not ("google" or "bing"))
-        {
-            Console.Error.WriteLine("The --engine option must be 'google' or 'bing'.");
-            return 2;
-        }
+        var query = options.Query;
+        var location = options.Location;
+        var engine = options.Engine;
+        var maxPages = options.MaxPages;
 
         var login = Environment.GetEnvironmentVariable("DATAFORSEO_LOGIN");
         var password = Environment.GetEnvironmentVariable("DATAFORSEO_PASSWORD");
@@ -250,38 +215,26 @@ internal static class Accu
                 return 1;
             }
 
-            using var document = JsonDocument.Parse(responseJson);
-            var root = document.RootElement;
-            if (root.TryGetProperty("status_code", out var statusCode) && statusCode.GetInt32() != 20000)
+            var parsedResponse = DataForSeoResponseParser.ParseSerp(responseJson);
+            if (parsedResponse.ErrorMessage is not null)
             {
-                Console.Error.WriteLine($"DataForSEO error: {GetJsonString(root, "status_message") ?? "request failed"}");
+                Console.Error.WriteLine($"DataForSEO error: {parsedResponse.ErrorMessage}");
                 return 1;
             }
 
-            if (!root.TryGetProperty("tasks", out var tasks) || tasks.GetArrayLength() == 0)
+            if (parsedResponse.NoTasks)
             {
                 Console.Error.WriteLine("DataForSEO returned no search task results.");
                 return 1;
             }
 
-            var firstTask = tasks[0];
-            if (firstTask.TryGetProperty("status_code", out var taskStatus) && taskStatus.GetInt32() != 20000)
+            if (parsedResponse.TaskErrorMessage is not null)
             {
-                Console.Error.WriteLine($"DataForSEO error: {GetJsonString(firstTask, "status_message") ?? "search task failed"}");
+                Console.Error.WriteLine($"DataForSEO error: {parsedResponse.TaskErrorMessage ?? "search task failed"}");
                 return 1;
             }
 
-            var items = firstTask.TryGetProperty("result", out var taskResults) && taskResults.GetArrayLength() > 0
-                && taskResults[0].TryGetProperty("items", out var resultItems)
-                    ? resultItems.EnumerateArray()
-                        .Where(item => GetJsonString(item, "type") == "organic")
-                        .Select(item => new SearchResult(
-                            item.TryGetProperty("rank_group", out var rank) ? rank.GetInt32() : 0,
-                            GetJsonString(item, "title") ?? "",
-                            GetJsonString(item, "url") ?? ""))
-                        .ToList()
-                    : [];
-            var results = items;
+            var results = parsedResponse.Results ?? [];
             var matches = results.Where(result => IsDomainMatch(result.Url, domain)).ToArray();
             if (matches.Length == 0)
             {
@@ -323,6 +276,91 @@ internal static class Accu
         return !string.IsNullOrWhiteSpace(value);
     }
 
+    internal static bool TryParseSerpOptions(string[] args, out SerpOptions options, out string error)
+    {
+        string? query = null;
+        string? location = null;
+        var engine = "google";
+        var maxPages = 10;
+        var positionalQueryParts = new List<string>();
+        var optionsStarted = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] is "--query" or "-q")
+            {
+                optionsStarted = true;
+                if (positionalQueryParts.Count > 0 || !TryReadOptionValue(args, ref i, out query))
+                {
+                    options = default;
+                    error = "Provide the search phrase either positionally or with --query, not both.";
+                    return false;
+                }
+            }
+            else if (args[i] is "--location" or "-l")
+            {
+                optionsStarted = true;
+                if (!TryReadOptionValue(args, ref i, out location))
+                {
+                    options = default;
+                    error = "The --location option requires a location.";
+                    return false;
+                }
+            }
+            else if (args[i] is "--engine" or "-e")
+            {
+                optionsStarted = true;
+                if (!TryReadOptionValue(args, ref i, out engine))
+                {
+                    options = default;
+                    error = "The --engine option requires 'google' or 'bing'.";
+                    return false;
+                }
+                engine = engine.ToLowerInvariant();
+            }
+            else if (args[i] is "--max-pages" or "-p")
+            {
+                optionsStarted = true;
+                if (!TryReadOptionValue(args, ref i, out var pagesText)
+                    || !int.TryParse(pagesText, out maxPages)
+                    || maxPages is < 1 or > 10)
+                {
+                    options = default;
+                    error = "The --max-pages option must be a number from 1 to 10.";
+                    return false;
+                }
+            }
+            else if (args[i].StartsWith("-", StringComparison.Ordinal) || optionsStarted)
+            {
+                options = default;
+                error = $"Unknown option or unexpected argument: {args[i]}";
+                return false;
+            }
+            else
+            {
+                positionalQueryParts.Add(args[i]);
+            }
+        }
+
+        query ??= positionalQueryParts.Count > 0 ? string.Join(' ', positionalQueryParts) : null;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            options = default;
+            error = "Provide a search phrase, either after the domain or with --query.";
+            return false;
+        }
+        if (engine is not ("google" or "bing"))
+        {
+            options = default;
+            error = "The --engine option must be 'google' or 'bing'.";
+            return false;
+        }
+
+        options = new SerpOptions(query, location, engine, maxPages);
+        error = "";
+        return true;
+    }
+
     private static async Task<int?> ResolveLocationCodeAsync(
         HttpClient httpClient,
         AuthenticationHeaderValue authHeader,
@@ -353,34 +391,28 @@ internal static class Accu
             return null;
         }
 
-        using var document = JsonDocument.Parse(responseJson);
-        var root = document.RootElement;
-        if (root.TryGetProperty("status_code", out var statusCode) && statusCode.GetInt32() != 20000)
+        IReadOnlyList<int>? locationCodes;
+        try
         {
-            Console.Error.WriteLine($"DataForSEO location lookup error: {GetJsonString(root, "status_message") ?? "request failed"}");
+            locationCodes = DataForSeoResponseParser.ParseLocationCodes(responseJson, parts[0], state);
+        }
+        catch (JsonException ex)
+        {
+            Console.Error.WriteLine($"Could not parse the DataForSEO location response: {ex.Message}");
             return null;
         }
-
-        if (!root.TryGetProperty("tasks", out var tasks) || tasks.GetArrayLength() == 0
-            || !tasks[0].TryGetProperty("result", out var locations))
+        if (locationCodes is null)
         {
-            Console.Error.WriteLine("DataForSEO returned no locations.");
+            Console.Error.WriteLine("DataForSEO returned no valid locations.");
             return null;
         }
-
-        var expectedName = $"{parts[0]},{state},United States";
-        var matches = locations.EnumerateArray()
-            .Where(item => string.Equals(GetJsonString(item, "location_name"), expectedName, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(GetJsonString(item, "location_type"), "City", StringComparison.OrdinalIgnoreCase)
-                && string.Equals(GetJsonString(item, "country_iso_code"), "US", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (matches.Length != 1 || !matches[0].TryGetProperty("location_code", out var locationCode))
+        if (locationCodes.Count != 1)
         {
             Console.Error.WriteLine($"Could not find a unique DataForSEO city location for '{location}'. Try a more specific city name.");
             return null;
         }
 
-        return locationCode.GetInt32();
+        return locationCodes[0];
     }
 
     private static string? NormalizeUsState(string value)
@@ -404,10 +436,11 @@ internal static class Accu
             : states.Values.FirstOrDefault(stateName => stateName.Equals(value, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string? GetJsonString(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
+    internal static string GetDisplayUrl(Uri uri)
+    {
+        var host = uri.IsDefaultPort ? uri.Host : $"{uri.Host}:{uri.Port}";
+        return $"{uri.Scheme}://{host}{uri.AbsolutePath}";
+    }
 
     private static string? NormalizeDomain(string value)
     {
@@ -436,17 +469,42 @@ internal static class Accu
         Console.WriteLine("accu — small command-line utilities");
         Console.WriteLine();
         Console.WriteLine("Commands:");
+        Console.WriteLine("  help                            Show this help");
+        Console.WriteLine("  examples (samples)              Show command examples");
+        Console.WriteLine("  version (-v, --version)        Show the installed accu version");
         Console.WriteLine("  capture <url> [--format jpg|pdf] [--output <path>]");
         Console.WriteLine("                                  Save the page as a JPG (default) or PDF in Downloads");
-        Console.WriteLine("  serp <domain> --query <phrase> [--location <city, state>]");
+        Console.WriteLine("  serp <domain> <search phrase> [--location <city, state>]");
+        Console.WriteLine("       (or use --query <phrase>)");
         Console.WriteLine("       [--engine google|bing] [--max-pages 1-10]");
         Console.WriteLine("                                  Find a domain's organic position on Google or Bing");
-        Console.WriteLine();
+    }
+
+    private static void PrintSummary()
+    {
+        Console.WriteLine(GetVersion());
+        Console.WriteLine("Commands: help, version, capture, serp, examples");
+        Console.WriteLine("More info: accu help or accu examples");
+    }
+
+    private static string GetVersion()
+    {
+        var informationalVersion = typeof(Accu).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        return string.IsNullOrWhiteSpace(informationalVersion)
+            ? typeof(Accu).Assembly.GetName().Version?.ToString(3) ?? "unknown"
+            : informationalVersion.Split('+')[0];
+    }
+
+    private static void PrintExamples()
+    {
         Console.WriteLine("Examples:");
+        Console.WriteLine("  accu version");
+        Console.WriteLine("  accu -v");
         Console.WriteLine("  accu capture accuraty.com");
         Console.WriteLine("  accu capture accuraty.com --format pdf");
         Console.WriteLine("  accu capture https://example.com --output page.jpg");
-        Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --location \"Savoy, IL\"");
+        Console.WriteLine("  accu serp classicplumb.com \"air conditioning\" --location \"Savoy, IL\"");
         Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --location \"Savoy, IL\" --engine bing");
         Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --location \"Savoy, IL\" --max-pages 3");
     }
@@ -471,7 +529,7 @@ internal static class Accu
 
     private static readonly Guid DownloadsFolderId = new("374DE290-123F-4565-9164-39C4925E467B");
 
-    private sealed record SearchResult(int Position, string Title, string Url);
+    internal readonly record struct SerpOptions(string Query, string? Location, string Engine, int MaxPages);
 
     [DllImport("shell32.dll")]
     private static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint flags, IntPtr token, out IntPtr path);
