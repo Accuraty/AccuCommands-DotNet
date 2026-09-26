@@ -1,3 +1,7 @@
+param(
+    [string] $PackageVersion
+)
+
 $ErrorActionPreference = 'Stop'
 
 $packageShare = 'A:\dev\nupkg'
@@ -6,7 +10,19 @@ if (-not (Test-Path -LiteralPath $packageShare -PathType Container)) {
     throw "Package share '$packageShare' is unavailable. Connect or map the A: drive, then try again."
 }
 
-dotnet pack (Join-Path $projectRoot 'AccuCommands.csproj') --configuration Release --output $packageShare
+$packArguments = @(
+    'pack'
+    (Join-Path $projectRoot 'AccuCommands.csproj')
+    '--configuration'
+    'Release'
+    '--output'
+    $packageShare
+)
+if ($PackageVersion) {
+    $packArguments += "--property:Version=$PackageVersion"
+}
+
+dotnet @packArguments
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet pack failed with exit code $LASTEXITCODE."
 }

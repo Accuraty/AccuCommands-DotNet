@@ -6,20 +6,27 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>accu</ToolCommandName>
     <PackageId>Accuraty.Commands.Cli</PackageId>
-    <Version>1.0.11</Version>
+    <Version>1.1.0</Version>
     <Authors>AccuCommands</Authors>
     <Description>Small command-line utilities, starting with full-page website capture.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);NU5111</NoWarn>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Playwright" Version="1.*" />
+    <InternalsVisibleTo Include="AccuCommands.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Playwright" Version="1.63.0" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="README.md" Pack="true" PackagePath="\" />
+    <Compile Remove="tests/**/*.cs" />
   </ItemGroup>
 
 </Project>
