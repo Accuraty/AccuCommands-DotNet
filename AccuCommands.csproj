@@ -6,7 +6,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>accu</ToolCommandName>
     <PackageId>Accuraty.Commands.Cli</PackageId>
-    <Version>1.0.10</Version>
+    <Version>1.0.11</Version>
     <Authors>AccuCommands</Authors>
     <Description>Small command-line utilities, starting with full-page website capture.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
