@@ -1,0 +1,25 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "terminal.integrated.defaultProfile.windows": "PowerShell 7",
+    "terminal.integrated.profiles.windows": {
+      "PowerShell 7": {
+        "path": "pwsh.exe",
+        "args": [
+          "-NoLogo",
+          "-NoExit",
+          "-Command",
+          "Write-Host ('.NET SDK: ' + (dotnet --version)) -ForegroundColor Yellow;",
+          "Write-Host '';",
+          "Write-Host 'AccuCommands is a custom Accuraty command line tool' -ForegroundColor White;",
+          "Write-Host '';",
+          "Write-Host 'Just type \"accu\" to get started.' -ForegroundColor Yellow;",
+          "Write-Host '';"
+        }
+      }
+    }
+  }

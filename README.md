@@ -1,0 +1,73 @@
+# Accuraty.Commands.Cli
+
+A .NET 10 global command-line tool. The installed command is `accu`.
+
+Complete how-to setup on Windows 11 is in /docs/README-Windows11-Setup.md
+
+The project tracks the latest stable Microsoft.Playwright release in the 1.x series (`1.*`). A normal restore during build or package publishing resolves the latest matching minor and patch version.
+
+## Capture a page
+
+```powershell
+accu capture accuraty.com
+```
+
+This opens the page in headless Chromium and saves a full-page JPG in the current user's Downloads folder. Use `--output` (or `-o`) to choose a path:
+
+```powershell
+accu capture https://example.com --output .\example.jpg
+```
+
+Use `--format pdf` (or `-f pdf`) to save the page as a PDF instead. The default filename extension follows the selected format; an explicit output path is used as provided.
+
+```powershell
+accu capture accuraty.com --format pdf
+accu capture accuraty.com --format pdf --output .\accuraty.pdf
+```
+
+## Search Google results for a domain
+
+`serp` uses DataForSEO to retrieve organic results from Google (default) or Bing and lists matching positions, titles, and URLs. It checks up to 10 pages and asks DataForSEO to stop crawling when the requested domain or one of its subdomains appears in organic results. The endpoint requires DataForSEO API Access credentials and bills for each results page crawled; a found domain can stop the crawl early, while an unmatched domain can use all requested pages. See [DataForSEO pricing](https://dataforseo.com/pricing/serp/google-organic-serp-api).
+
+Create a DataForSEO account, find the API login and generated API password under API Access, then set them in the current PowerShell session:
+
+```powershell
+$env:DATAFORSEO_LOGIN = '<your-api-login>'
+$env:DATAFORSEO_PASSWORD = '<your-api-password>'
+```
+
+Pass the search phrase separately from the location. U.S. city and state names or abbreviations are resolved to the DataForSEO location code. If omitted, searches use the United States. `--engine` accepts `google` or `bing` and defaults to Google; `--max-pages` accepts 1 through 10 and defaults to 10:
+
+```powershell
+accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL"
+accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --engine bing
+accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --max-pages 3
+```
+
+DataForSEO receives the search query and returns Google results; `accu` matches the exact domain and its subdomains. Credentials are read from the environment and are not stored in the project or package. DataForSEO requires Basic authentication using the API credentials from its API Access page; the generated API password is different from the account password.
+
+## Publish to the organization feed
+
+With the `A:` network drive connected, run this from the project folder:
+
+```powershell
+.\ps\Publish-Package.ps1
+```
+
+This builds `Accuraty.Commands.Cli` and copies the NuGet package, its NuGet dependencies, and the installer script to `A:\dev\nupkg\`. The share acts as a local NuGet feed, so clients do not need to download the tool or its NuGet dependencies from nuget.org.
+
+## Install or update on another machine
+
+`dotnet build -c Release` only builds the project; it does not install or register the `accu` command. After a package has been published to the feed, run the installer below once on each machine (and again after publishing updates).
+
+The machine needs the .NET 10 SDK and access to `A:\dev\nupkg\`. In PowerShell, run:
+
+```powershell
+& 'A:\dev\nupkg\Install-Accu.ps1'
+```
+
+The installer installs or updates the global `accu` command, installs Playwright's Chromium browser, and adds the .NET tools directory to the current user's `PATH`. The browser install downloads Chromium from Playwright's browser CDN, so the machine needs access to that CDN during installation. Open a new terminal after the script completes, then run:
+
+```powershell
+accu capture accuraty.com
+```
