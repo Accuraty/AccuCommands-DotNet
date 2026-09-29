@@ -115,7 +115,7 @@
       "Accuraty.Commands.Cli": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Playwright": "[1.63.0, )"
+          "Microsoft.Playwright": "[1.63.*, )"
         }
       }
     }

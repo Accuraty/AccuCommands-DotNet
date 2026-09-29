@@ -4,7 +4,7 @@ A .NET 10 global command-line tool. The installed command is `accu`.
 
 Complete how-to setup on Windows 11 is in /docs/README-Windows11-Setup.md
 
-Microsoft.Playwright is pinned to version 1.63.0, with the resolved dependency graph recorded in `packages.lock.json`. To update dependencies, change the package version intentionally and run `dotnet restore` to refresh the lock file.
+Microsoft.Playwright is pinned to version 1.63.*, with the resolved dependency graph recorded in `packages.lock.json`. To update dependencies, change the package version intentionally and run `dotnet restore` to refresh the lock file.
 
 ## Build and test
 
