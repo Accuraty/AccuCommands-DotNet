@@ -81,7 +81,7 @@ Then search for a domain and phrase:
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL"
 ```
 
-The location is optional; searches default to the United States. U.S. city and state names or abbreviations are resolved to DataForSEO location codes. Select Bing with `--engine bing`; `--max-pages` can be set from 1 to 10 and defaults to 10.
+The location is optional; searches default to the United States. U.S. city and state names or abbreviations are resolved to DataForSEO location codes. Select Bing with `--engine bing`; `--max-pages` can be set from 1 to 10 and defaults to 10. The API request timeout defaults to 120 seconds and can be changed with `--timeout <seconds>`. The retry attempt count defaults to 3 and can be changed with `--retries <count>` (0 disables retries); only DataForSEO error codes explicitly added to the retry list are retried. Add `--verbose` to print request settings, response timing and cost, page and result counts, and extra error information.
 
 DataForSEO receives the search query and charges for each results page crawled. The command can stop early if it finds the requested domain or a subdomain in organic results. See [DataForSEO pricing](https://dataforseo.com/pricing/serp/google-organic-serp-api).
 

@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Net;
 using System.Net.Http.Headers;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Playwright;
@@ -141,7 +143,7 @@ internal static class Accu
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("Usage: accu serp <domain> --query <phrase> [--location <city, state>] [--engine google|bing] [--max-pages 1-10]");
+            Console.Error.WriteLine("Usage: accu serp <domain> --query <phrase> [--location <city, state>] [--engine google|bing] [--max-pages 1-10] [--timeout <seconds>] [--retries <count>] [--verbose]");
             return 2;
         }
 
@@ -161,6 +163,9 @@ internal static class Accu
         var location = options.Location;
         var engine = options.Engine;
         var maxPages = options.MaxPages;
+        var timeoutSeconds = options.TimeoutSeconds;
+        var verbose = options.Verbose;
+        var retries = options.Retries;
 
         var login = Environment.GetEnvironmentVariable("DATAFORSEO_LOGIN");
         var password = Environment.GetEnvironmentVariable("DATAFORSEO_PASSWORD");
@@ -172,7 +177,7 @@ internal static class Accu
 
         try
         {
-            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
             var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{login}:{password}"));
             var authHeader = new AuthenticationHeaderValue("Basic", credentials);
             var locationCode = string.IsNullOrWhiteSpace(location)
@@ -203,24 +208,74 @@ internal static class Accu
             else
                 task["location_name"] = "United States";
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, $"https://api.dataforseo.com/v3/serp/{engine}/organic/live/regular");
-            request.Headers.Authorization = authHeader;
-            request.Content = new StringContent(JsonSerializer.Serialize(new[] { task }), Encoding.UTF8, "application/json");
-            Console.WriteLine($"Searching {engine} for \"{query.Trim()}\" via DataForSEO …");
-            using var response = await httpClient.SendAsync(request);
-            var responseJson = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode)
+            var requestBody = JsonSerializer.Serialize(new[] { task });
+            Console.WriteLine($"\"{query.Trim()}\" on {char.ToUpperInvariant(engine[0])}{engine[1..]} at {DateTime.Now:HH:mm:ss} ({timeoutSeconds} sec timeout)...");
+            if (verbose)
             {
-                Console.Error.WriteLine($"DataForSEO request failed with HTTP {(int)response.StatusCode} ({response.ReasonPhrase}). Check your API credentials and account balance.");
+                Console.WriteLine($"Using DataForSEO API, with depth: {maxPages * 10}, max pages: {maxPages}");
+                Console.WriteLine($"Stop crawl when domain or subdomain '{domain}' appears in organic results.");
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            DataForSeoResponseParser.SerpResponse? parsedResponse = null;
+            HttpStatusCode? httpErrorStatus = null;
+            string? httpErrorReason = null;
+            string? httpErrorBody = null;
+            for (var attempt = 1; attempt <= retries + 1; attempt++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, $"https://api.dataforseo.com/v3/serp/{engine}/organic/live/regular");
+                request.Headers.Authorization = authHeader;
+                request.Content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+
+                using var response = await httpClient.SendAsync(request);
+                var responseJson = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    httpErrorStatus = response.StatusCode;
+                    httpErrorReason = response.ReasonPhrase;
+                    httpErrorBody = responseJson;
+                    break;
+                }
+
+                parsedResponse = DataForSeoResponseParser.ParseSerp(responseJson);
+                var providerError = parsedResponse.Error ?? parsedResponse.TaskError;
+                if (providerError is null || !RetryableDataForSeoErrorCodes.Contains(providerError.StatusCode))
+                    break;
+
+                if (attempt <= retries)
+                {
+                    if (verbose)
+                    {
+                        PrintDataForSeoError(providerError, true);
+                        Console.WriteLine($"Retryable DataForSEO error {providerError.StatusCode} ({providerError.Message}); retrying attempt {attempt + 1} of {retries + 1}.");
+                    }
+                    continue;
+                }
+            }
+            stopwatch.Stop();
+            Console.WriteLine($"Elapsed time: {Math.Round(stopwatch.Elapsed.TotalSeconds, MidpointRounding.AwayFromZero):0} seconds");
+            if (httpErrorStatus is HttpStatusCode status)
+            {
+                Console.Error.WriteLine($"DataForSEO request failed with HTTP {(int)status} ({httpErrorReason}). Check your API credentials and account balance.");
+                if (verbose && !string.IsNullOrWhiteSpace(httpErrorBody))
+                    Console.Error.WriteLine($"DataForSEO response details: {httpErrorBody}");
                 return 1;
             }
 
-            var parsedResponse = DataForSeoResponseParser.ParseSerp(responseJson);
-            if (parsedResponse.ErrorMessage is not null)
+            if (parsedResponse?.Error is DataForSeoResponseParser.SerpError responseError)
             {
-                Console.Error.WriteLine($"DataForSEO error: {parsedResponse.ErrorMessage}");
+                PrintDataForSeoError(responseError, verbose);
                 return 1;
             }
+
+            if (parsedResponse is null)
+            {
+                Console.Error.WriteLine("DataForSEO returned no search task results.");
+                return 1;
+            }
+
+            if (verbose)
+                PrintSerpDiagnostics(parsedResponse.Diagnostics, parsedResponse.Results);
 
             if (parsedResponse.NoTasks)
             {
@@ -228,9 +283,9 @@ internal static class Accu
                 return 1;
             }
 
-            if (parsedResponse.TaskErrorMessage is not null)
+            if (parsedResponse.TaskError is DataForSeoResponseParser.SerpError taskError)
             {
-                Console.Error.WriteLine($"DataForSEO error: {parsedResponse.TaskErrorMessage ?? "search task failed"}");
+                PrintDataForSeoError(taskError, verbose);
                 return 1;
             }
 
@@ -238,7 +293,7 @@ internal static class Accu
             var matches = results.Where(result => IsDomainMatch(result.Url, domain)).ToArray();
             if (matches.Length == 0)
             {
-                Console.WriteLine($"No results from {domain} found in up to {maxPages} page(s) of {engine} organic results ({results.Count} results returned).");
+                Console.WriteLine($"No results from {domain} found in up to {maxPages} page(s) of {engine} organic results ({results.Count} organic results returned).");
                 return 0;
             }
 
@@ -267,6 +322,45 @@ internal static class Accu
         }
     }
 
+    private static void PrintDataForSeoError(DataForSeoResponseParser.SerpError error, bool verbose)
+    {
+        Console.Error.WriteLine($"DataForSEO error: {error.Message}");
+        if (!verbose)
+            return;
+
+        Console.Error.WriteLine($"DataForSEO error details: status code {error.StatusCode}, context {error.Context}"
+            + (string.IsNullOrWhiteSpace(error.TaskId) ? "." : $", task ID {error.TaskId}."));
+    }
+
+    private static void PrintSerpDiagnostics(
+        DataForSeoResponseParser.SerpDiagnostics? diagnostics,
+        IReadOnlyList<DataForSeoResponseParser.SearchItem>? results)
+    {
+        if (diagnostics is null)
+            return;
+
+        var task = diagnostics.TaskId is null ? "unavailable" : diagnostics.TaskId;
+        Console.WriteLine($"DataForSEO response: task {task}; API status {diagnostics.ResponseStatusCode?.ToString() ?? "unavailable"}; task status {diagnostics.TaskStatusCode?.ToString() ?? "unavailable"}.");
+        Console.WriteLine($"DataForSEO timing and cost: API {diagnostics.ApiTime ?? "unavailable"}; task {diagnostics.TaskTime ?? "unavailable"}; cost ${diagnostics.ApiCost?.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"} total / ${diagnostics.TaskCost?.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"} task.");
+        Console.WriteLine($"SERP metadata: {diagnostics.PagesCount?.ToString() ?? "unavailable"} page(s) retrieved; {diagnostics.ItemsCount?.ToString() ?? "unavailable"} total item(s); estimated total results {diagnostics.SearchResultsCount?.ToString() ?? "unavailable"}; item types [{string.Join(", ", diagnostics.ItemTypes)}].");
+
+        var organicResults = results ?? [];
+        var pageCounts = organicResults
+            .GroupBy(item => item.Page)
+            .OrderBy(group => group.Key)
+            .Select(group => $"{(group.Key is int page ? page.ToString() : "unknown")}: {group.Count()}");
+        Console.WriteLine($"Organic results returned: {organicResults.Count}; by page [{string.Join(", ", pageCounts)}].");
+        if (!string.IsNullOrWhiteSpace(diagnostics.ResultDateTime))
+            Console.WriteLine($"SERP result time (UTC): {diagnostics.ResultDateTime}");
+        if (!string.IsNullOrWhiteSpace(diagnostics.CorrectedKeyword))
+            Console.WriteLine($"Search engine correction: {diagnostics.CorrectedKeyword} ({diagnostics.CorrectionType ?? "type unavailable"})");
+        if (!string.IsNullOrWhiteSpace(diagnostics.CheckUrl))
+            Console.WriteLine($"DataForSEO check URL: {diagnostics.CheckUrl}");
+    }
+
+    // Add DataForSEO status codes here only when [human] identifies them as safe to retry.
+    private static readonly HashSet<int> RetryableDataForSeoErrorCodes = [40101];
+
     private static bool TryReadOptionValue(string[] args, ref int index, out string value)
     {
         value = "";
@@ -282,6 +376,9 @@ internal static class Accu
         string? location = null;
         var engine = "google";
         var maxPages = 10;
+        var timeoutSeconds = 120;
+        var verbose = false;
+        var retries = 3;
         var positionalQueryParts = new List<string>();
         var optionsStarted = false;
 
@@ -330,6 +427,35 @@ internal static class Accu
                     return false;
                 }
             }
+            else if (args[i] is "--timeout" or "-t")
+            {
+                optionsStarted = true;
+                if (!TryReadOptionValue(args, ref i, out var timeoutText)
+                    || !int.TryParse(timeoutText, out timeoutSeconds)
+                    || timeoutSeconds is < 1 or > 4_294_967)
+                {
+                    options = default;
+                    error = "The --timeout option must be a number of seconds from 1 to 4294967.";
+                    return false;
+                }
+            }
+            else if (args[i] is "--verbose")
+            {
+                optionsStarted = true;
+                verbose = true;
+            }
+            else if (args[i] is "--retries" or "-r")
+            {
+                optionsStarted = true;
+                if (!TryReadOptionValue(args, ref i, out var retriesText)
+                    || !int.TryParse(retriesText, out retries)
+                    || retries is < 0 or > 10)
+                {
+                    options = default;
+                    error = "The --retries option must be a number from 0 to 10.";
+                    return false;
+                }
+            }
             else if (args[i].StartsWith("-", StringComparison.Ordinal) || optionsStarted)
             {
                 options = default;
@@ -356,7 +482,7 @@ internal static class Accu
             return false;
         }
 
-        options = new SerpOptions(query, location, engine, maxPages);
+        options = new SerpOptions(query, location, engine, maxPages, timeoutSeconds, verbose, retries);
         error = "";
         return true;
     }
@@ -476,7 +602,9 @@ internal static class Accu
         Console.WriteLine("                                  Save the page as a JPG (default) or PDF in Downloads");
         Console.WriteLine("  serp <domain> <search phrase> [--location <city, state>]");
         Console.WriteLine("       (or use --query <phrase>)");
-        Console.WriteLine("       [--engine google|bing] [--max-pages 1-10]");
+        Console.WriteLine("       [--engine google|bing] [--max-pages 1-10] [--timeout <seconds>] [--retries <count>] [--verbose]");
+        Console.WriteLine("                                  API timeout defaults to 120 seconds");
+        Console.WriteLine("                                  Retries default to 3; only configured error codes are retried");
         Console.WriteLine("                                  Find a domain's organic position on Google or Bing");
     }
 
@@ -507,6 +635,7 @@ internal static class Accu
         Console.WriteLine("  accu serp classicplumb.com \"air conditioning\" --location \"Savoy, IL\"");
         Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --location \"Savoy, IL\" --engine bing");
         Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --location \"Savoy, IL\" --max-pages 3");
+        Console.WriteLine("  accu serp classicplumb.com --query \"air conditioning\" --verbose");
     }
 
     private static string SafeFileName(string value)
@@ -529,7 +658,7 @@ internal static class Accu
 
     private static readonly Guid DownloadsFolderId = new("374DE290-123F-4565-9164-39C4925E467B");
 
-    internal readonly record struct SerpOptions(string Query, string? Location, string Engine, int MaxPages);
+    internal readonly record struct SerpOptions(string Query, string? Location, string Engine, int MaxPages, int TimeoutSeconds, bool Verbose, int Retries);
 
     [DllImport("shell32.dll")]
     private static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid rfid, uint flags, IntPtr token, out IntPtr path);

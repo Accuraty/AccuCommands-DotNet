@@ -59,13 +59,16 @@ $env:DATAFORSEO_LOGIN = '<your-api-login>'
 $env:DATAFORSEO_PASSWORD = '<your-api-password>'
 ```
 
-Pass the search phrase separately from the location. U.S. city and state names or abbreviations are resolved to the DataForSEO location code. If omitted, searches use the United States. `--engine` accepts `google` or `bing` and defaults to Google; `--max-pages` accepts 1 through 10 and defaults to 10:
+Pass the search phrase separately from the location. U.S. city and state names or abbreviations are resolved to the DataForSEO location code. If omitted, searches use the United States. `--engine` accepts `google` or `bing` and defaults to Google; `--max-pages` accepts 1 through 10 and defaults to 10; `--timeout` sets the API timeout in seconds and defaults to 120; `--retries` sets the number of retry attempts and defaults to 3 (0 disables retries). Retries only occur for DataForSEO error codes explicitly added to the retry list in the program. Add `--verbose` to show request settings, response timing and cost, page and result counts, and extra error information:
 
 ```powershell
 accu serp classicplumb.com "air conditioning" --location "Savoy, IL"
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL"
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --engine bing
 accu serp classicplumb.com --query "air conditioning" --location "Savoy, IL" --max-pages 3
+accu serp classicplumb.com --query "air conditioning" --timeout 240
+accu serp classicplumb.com --query "air conditioning" --verbose
+accu serp classicplumb.com --query "air conditioning" --retries 5 --verbose
 ```
 
 DataForSEO receives the search query and returns Google results; `accu` matches the exact domain and its subdomains. Credentials are read from the environment and are not stored in the project or package. DataForSEO requires Basic authentication using the API credentials from its API Access page; the generated API password is different from the account password.
@@ -88,7 +91,7 @@ With the `A:` network drive connected, run this from the project folder:
 .\ps\Build-Publish-Install.ps1
 ```
 
-This packs the project in Release configuration with a unique next-patch prerelease version (for example, `1.1.1-dev.20260926T1530001234567Z` when the stable project version is `1.1.0`), publishes the package and dependencies to `A:\dev\nupkg\`, then installs that exact prerelease and its Chromium browser for the current user. The project file keeps its stable `Major.Minor.Patch` version unchanged. Try `accu version` when it finishes; it reports the prerelease version for the installed development build.
+This packs the project in Release configuration with the next dated development version (for example, `1.1.1-20260929-dev03` when the stable project version is `1.1.0`). The UTC date is followed by a two-digit iteration number that increments for each build published that day. It publishes the package and dependencies to `A:\dev\nupkg\`, then installs that exact version and its Chromium browser for the current user. The project file keeps its stable `Major.Minor.Patch` version unchanged. Try `accu version` when it finishes; it reports the development version for the installed build.
 
 ## Install or update on another machine
 

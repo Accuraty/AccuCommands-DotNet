@@ -25,6 +25,10 @@ $installed = Get-InstalledAccu
 $toolArguments = @('tool')
 if ($installed) {
     $toolArguments += 'update'
+    if ($PackageVersion) {
+        # New date-first prerelease versions sort below the previous dev.timestamp versions.
+        $toolArguments += '--allow-downgrade'
+    }
 } else {
     $toolArguments += 'install'
 }
